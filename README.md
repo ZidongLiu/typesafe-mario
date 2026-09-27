@@ -29,7 +29,9 @@ The initial action set is intentionally small:
 ## Requirements
 
 - Python 3.13 or newer
-- A TypeSafe API key in `TYPESAFE_API_KEY`
+- A TypeSafe API key in `TYPESAFE_API_KEY`, or a Vercel AI Gateway key in
+  `AI_GATEWAY_API_KEY` (used when `TYPESAFE_API_KEY` is unset; override the model
+  with `AI_GATEWAY_MODEL`, default `typesafe-ai/jev`)
 - A legal local setup for Super Mario Bros.
 
 This repository contains no Nintendo ROM or other copyrighted game data. You are
@@ -42,6 +44,8 @@ lawfully.
 py -3.13 -m venv .venv
 .venv\Scripts\python -m pip install -e ".[mario,dev]"
 $env:TYPESAFE_API_KEY = "your-key"
+# or, to reach Jev through Vercel AI Gateway:
+$env:AI_GATEWAY_API_KEY = "your-vercel-key"
 ```
 
 Inspect the exact JSON and text that will be sent to TypeSafe without launching the

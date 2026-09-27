@@ -8,7 +8,7 @@ from typing import Any
 
 from .actions import ACTION_TO_INDEX, JUMP_ACTIONS, JUMP_RELEASE_ACTION, Action
 from .dashboard import DashboardCommand, LiveDashboard
-from .policy import Decision, Policy
+from .policy import Decision, Policy, PolicyUnavailableError
 from .state import MarioStateParser
 
 
@@ -71,6 +71,11 @@ def _record_decision(
     log.flush()
 
 
+def _fallback_decision(previous_action: Action | None) -> Decision:
+    action = previous_action or Action.NOOP
+    return Decision(action=action, confidence=0.0, probabilities={}, latency_ms=0.0)
+
+
 def _run_realtime_dashboard(
     *,
     env: Any,
@@ -114,6 +119,17 @@ def _run_realtime_dashboard(
                 previous_response_delay_frames=previous_response_delay_frames,
             )
 
+            if (
+                pending is not None
+                and pending.done()
+                and isinstance(pending.exception(), PolicyUnavailableError)
+            ):
+                # Keep playing the current action; a new request goes out on the normal cadence.
+                print(
+                    f"#{pending_index:04d} decision failed, keeping current action: "
+                    f"{pending.exception()}"
+                )
+                pending = None
             if pending is not None and pending.done():
                 active_decision = pending.result()
                 _record_decision(
@@ -266,7 +282,11 @@ def run_episode(
                 if snapshot.dead or snapshot.clear:
                     break
 
-                decision = policy.choose(snapshot, actions)
+                try:
+                    decision = policy.choose(snapshot, actions)
+                except PolicyUnavailableError as exc:
+                    print(f"#{decision_index:04d} decision failed, keeping current action: {exc}")
+                    decision = _fallback_decision(previous_action)
                 action_index = ACTION_TO_INDEX[decision.action]
                 total_reward = 0.0
                 terminated = truncated = False

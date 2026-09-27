@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -85,7 +86,20 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def load_dotenv(path: Path = Path(".env")) -> None:
+    """Load KEY=VALUE lines from `.env` without overriding variables already set."""
+    if not path.is_file():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.removeprefix("export ").split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    load_dotenv()
     args = build_parser().parse_args(argv)
     if args.command == "state-demo":
         return state_demo()
