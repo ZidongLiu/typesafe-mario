@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
 ENEMY_NAMES: dict[int, str] = {
-    0x00: "none",
+    0x00: "koopa_troopa",
     0x06: "goomba",
     0x05: "hammer_bro",
     0x07: "bloober",
@@ -15,6 +16,16 @@ ENEMY_NAMES: dict[int, str] = {
     0x31: "flagpole",
 }
 
+# Speeds are averaged over this many frames. Mario and enemies move in sub-pixel steps, so a
+# one-frame delta flips between whole pixels (a goomba closing at ~1.1 px/frame often reads as 0).
+VELOCITY_WINDOW_FRAMES = 8
+# A jump may start this many frames earlier than the latest safe takeoff (8 frames before contact).
+JUMP_LEAD_WINDOW_FRAMES = 16
+
+
+def _window_velocity(history: deque[int]) -> float:
+    return round((history[-1] - history[0]) / (len(history) - 1), 2) if len(history) > 1 else 0
+
 
 @dataclass(frozen=True)
 class EnemyObservation:
@@ -23,7 +34,7 @@ class EnemyObservation:
     kind: str
     dx_pixels: int
     dy_pixels: int
-    relative_velocity_x: int = 0
+    relative_velocity_x: float = 0
 
     def to_state(self) -> dict[str, Any]:
         horizontal = "ahead" if self.dx_pixels >= 0 else "behind"
@@ -46,7 +57,7 @@ class MarioSnapshot:
     area: int
     x: int
     y: int
-    dx: int
+    dx: float
     dy: int
     direction: str
     vertical_motion: str
@@ -132,6 +143,15 @@ class MarioSnapshot:
 
         obstacle_ahead = obstacle_distance is not None and obstacle_distance <= 3
         gap_ahead = gap_distance is not None and gap_distance <= 3
+        # Exact pixels to the first unsupported column (grid columns sample x + n*16).
+        gap_edge = (
+            (self.x + gap_distance * 16) // 16 * 16 - self.x if gap_distance is not None else None
+        )
+        # Measured at the end staircase: a takeoff from the last tile before the gap clears it,
+        # even walking, while one from 3 tiles out (the old "within three tiles" rule) falls in.
+        # So jump only once the edge would be reached before the next decision can act.
+        reach = max(16, self.dx * (self.decision_horizon_frames + self.last_response_delay_frames))
+        gap_takeoff_now = bool(self.grounded and gap_edge is not None and gap_edge <= reach)
         if obstacle_ahead:
             summary = (
                 f"Blocking obstacle {obstacle_distance} tile(s) ahead, "
@@ -149,6 +169,8 @@ class MarioSnapshot:
             "gap_ahead": gap_ahead,
             "gap_distance_tiles": gap_distance,
             "gap_width_tiles_visible": gap_width,
+            "gap_edge_distance_pixels": gap_edge,
+            "gap_takeoff_now": gap_takeoff_now,
             "clear_forward_tiles": clear_forward,
             "summary": summary,
         }
@@ -192,10 +214,14 @@ class MarioSnapshot:
             if contact_frames is not None
             else None
         )
+        # Measured in the emulator: a held jump started 8-24 frames before contact clears a goomba
+        # at walking and running speed. Fire at the first decision inside that band; the old
+        # 8-16 frame window was as narrow as the decision cadence, so a speed-up skipped it.
+        # A missed window (negative deadline) still says jump: running on is certain contact.
         jump_must_start_now = bool(
             self.grounded
             and takeoff_deadline is not None
-            and 0 <= takeoff_deadline <= self.decision_horizon_frames
+            and takeoff_deadline <= JUMP_LEAD_WINDOW_FRAMES
         )
         upcoming_enemies = [
             {
@@ -379,7 +405,8 @@ class MarioStateParser:
         self._last_y: int | None = None
         self._best_x = 0
         self._stalled_steps = 0
-        self._last_enemy_dx: dict[int, int] = {}
+        self._x_history: deque[int] = deque(maxlen=VELOCITY_WINDOW_FRAMES + 1)
+        self._enemy_dx_history: dict[int, deque[int]] = {}
         self._tracked_action: str | None = None
         self._action_start_x = 0
         self._action_frames = 0
@@ -428,7 +455,8 @@ class MarioStateParser:
             "y_pixel",
             self._ram_byte(ram, 0x03B8, max(0, 255 - y)),
         )
-        dx = 0 if self._last_x is None else x - self._last_x
+        self._x_history.append(x)
+        dx = _window_velocity(self._x_history)
         dy = 0 if self._last_y is None else y - self._last_y
 
         if dx > 1:
@@ -591,9 +619,10 @@ class MarioStateParser:
                 0x0016 + slot,
                 fallback_types[slot] if slot < len(fallback_types) else 0,
             )
-            if ram is not None and active == 0:
-                continue
-            if kind_id == 0:
+            # In RAM, type 0x00 is the green Koopa Troopa, so only the active flag says a slot is
+            # empty. The info-dict fallback has no such flag and uses 0 for "no enemy".
+            if (ram is not None and active == 0) or (ram is None and kind_id == 0):
+                self._enemy_dx_history.pop(slot, None)  # a reused slot is a different enemy
                 continue
             if ram is None:
                 enemy_x = mario_x
@@ -605,9 +634,11 @@ class MarioStateParser:
                 enemy_y = self._ram_byte(ram, 0x00CF + slot)
             dx = enemy_x - mario_x
             dy = enemy_y - mario_screen_y
-            previous_dx = self._last_enemy_dx.get(slot)
-            relative_velocity_x = 0 if previous_dx is None else dx - previous_dx
-            self._last_enemy_dx[slot] = dx
+            history = self._enemy_dx_history.setdefault(
+                slot, deque(maxlen=VELOCITY_WINDOW_FRAMES + 1)
+            )
+            history.append(dx)
+            relative_velocity_x = _window_velocity(history)
             if -192 <= dx <= 320:
                 enemies.append(
                     EnemyObservation(

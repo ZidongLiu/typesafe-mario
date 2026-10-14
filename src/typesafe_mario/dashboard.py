@@ -297,3 +297,42 @@ class LiveDashboard:
         self.pg.display.flip()
         self.clock.tick(c.fps)
         return command
+
+
+class GameWindow:
+    """Plain scaled game window for `--display game`.
+
+    nes-py's own viewer depends on pyglet<=1.5.21, which crashes on Python 3.14 under Windows,
+    so frames are drawn with pygame like the dashboard.
+    """
+
+    def __init__(self, scale: int = 3) -> None:
+        try:
+            import pygame
+        except ImportError as exc:
+            raise RuntimeError(
+                "The game window needs pygame. Install the mario extras first."
+            ) from exc
+        self.pg = pygame
+        self.scale = scale
+        pygame.init()
+        pygame.display.set_caption("TypeSafe plays Super Mario Bros.")
+        self.screen = pygame.display.set_mode((256 * scale, 240 * scale))
+
+    def show(self, frame: Any) -> bool:
+        """Draw one frame; returns False once the window is closed (or Esc/Q is pressed)."""
+        import numpy as np
+
+        for event in self.pg.event.get():
+            if event.type == self.pg.QUIT or (
+                event.type == self.pg.KEYDOWN and event.key in (self.pg.K_ESCAPE, self.pg.K_q)
+            ):
+                return False
+        pixels = np.asarray(frame)[:, :, :3]
+        source = self.pg.surfarray.make_surface(pixels.swapaxes(0, 1))
+        self.screen.blit(self.pg.transform.scale(source, self.screen.get_size()), (0, 0))
+        self.pg.display.flip()
+        return True
+
+    def close(self) -> None:
+        self.pg.quit()

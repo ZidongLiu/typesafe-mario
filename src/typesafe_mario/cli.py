@@ -6,7 +6,7 @@ import os
 from collections.abc import Sequence
 from pathlib import Path
 
-from .policy import HeuristicPolicy, TypeSafePolicy
+from .policy import BACKENDS, HeuristicPolicy, create_policy
 from .runner import run_episode
 from .state import MarioStateParser
 
@@ -72,6 +72,30 @@ def build_parser() -> argparse.ArgumentParser:
     play.add_argument("--seed", type=int, default=123)
     play.add_argument("--policy", choices=("typesafe", "heuristic"), default="typesafe")
     play.add_argument(
+        "--backend",
+        choices=BACKENDS,
+        default="auto",
+        help=(
+            "Model service for decisions: typesafe (direct API), vercel (AI Gateway), local "
+            "(your Jev-compatible server), claude (Anthropic API), or auto (typesafe if "
+            "TYPESAFE_API_KEY is set, else vercel)"
+        ),
+    )
+    play.add_argument(
+        "--model",
+        help="Model id for the backend, e.g. claude-opus-5 or your local server's model name",
+    )
+    play.add_argument(
+        "--base-url",
+        help="API root for typesafe/vercel/local, e.g. http://127.0.0.1:8080 for a local server",
+    )
+    play.add_argument(
+        "--claude-effort",
+        choices=("low", "medium", "high", "xhigh", "max"),
+        default="low",
+        help="Claude effort level; lower is faster (claude backend only)",
+    )
+    play.add_argument(
         "--display",
         choices=("dashboard", "game", "none"),
         default="dashboard",
@@ -104,7 +128,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "state-demo":
         return state_demo()
     if args.command == "play":
-        policy = TypeSafePolicy() if args.policy == "typesafe" else HeuristicPolicy()
+        if args.policy == "typesafe":
+            policy = create_policy(
+                args.backend,
+                model=args.model,
+                base_url=args.base_url,
+                claude_effort=args.claude_effort,
+            )
+            print(f"Decision backend: {policy.source}")
+        else:
+            policy = HeuristicPolicy()
         log_path = run_episode(
             env_id=args.env,
             policy=policy,

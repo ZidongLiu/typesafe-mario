@@ -32,6 +32,10 @@ JUMP_RELEASE_ACTION: dict[Action, Action] = {
     Action.JUMP: Action.NOOP,
 }
 
+JUMP_HOLD_ACTION: dict[Action, Action] = {
+    release: jump for jump, release in JUMP_RELEASE_ACTION.items()
+}
+
 
 ACTION_DESCRIPTIONS: dict[Action, str] = {
     Action.NOOP: "Release the controls and let current momentum continue.",
