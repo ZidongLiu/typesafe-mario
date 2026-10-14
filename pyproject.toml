@@ -28,6 +28,10 @@ dev = [
   "pytest>=8",
   "ruff>=0.9",
 ]
+probe = [
+    "matplotlib>=3.11.2",
+    "pyarrow>=26.0.0",
+]
 
 [project.scripts]
 typesafe-mario = "typesafe_mario.cli:main"

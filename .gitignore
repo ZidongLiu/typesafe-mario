@@ -8,3 +8,5 @@ artifacts/
 .env
 *.nes
 *.rom
+probes/.cache/
+probes/results/
